@@ -1,0 +1,250 @@
+---
+title: "model_coefs"
+author: "Aodhan Hayter"
+date: "12/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(missForest)
+library(ggplot2)
+```
+
+```{r}
+compare_factor_levels <- function(train, test) {
+  train_levels <- train %>%
+    select_if(is.character) %>%
+    mutate_all(.funs = factor) %>%
+    map(.f = levels)
+
+  test_levels <- test %>%
+    select_if(is.character) %>%
+    mutate_all(.funs = factor) %>%
+    map(.f = levels)
+
+  data <- data.frame(
+    variables = names(train_levels),
+    identical_levels = 0
+  )
+
+  for (i in 1:nrow(data)) {
+    data$identical_levels[i] <- ifelse(setequal(train_levels[[i]], test_levels[[i]]), "yes", "no")
+  }
+
+  print(data)
+}
+
+test_missing <- function(data) {
+  data %>%
+    mutate_all(.funs = is.na) %>%
+    summarise_all(.funs = sum) %>%
+    t() %>%
+    as.data.frame() %>%
+    filter(V1 > 0)
+}
+
+clean_data <- function(data) {
+  data %>%
+    select(-Utilities) %>%
+    mutate(
+      TotalSF = `1stFlrSF` + `2ndFlrSF` + TotalBsmtSF,
+      TotalBath = BsmtFullBath + BsmtHalfBath + FullBath + HalfBath,
+      RoofMatl = factor(RoofMatl),
+      MSZoning = factor(MSZoning),
+      OverallQual = factor(OverallQual),
+      PoolQC = factor(PoolQC) %>% addNA(),
+      ExterQual = factor(ExterQual),
+      KitchenQual = factor(KitchenQual),
+      Foundation = factor(Foundation),
+      BsmtQual = factor(BsmtQual) %>% addNA(),
+      BsmtFinType1 = if_else(is.na(BsmtFinType1), "No Basement", BsmtFinType1) %>% factor(),
+      GarageFinish = if_else(is.na(GarageFinish), "No Garage", GarageFinish) %>% factor(),
+      Neighborhood = factor(Neighborhood),
+      MasVnrType = factor(MasVnrType) %>% addNA(),
+      SaleType = factor(SaleType),
+      GarageType = if_else(is.na(GarageType), "No Garage", GarageType) %>% factor(),
+      SaleCondition = factor(SaleCondition),
+      FireplaceQu = if_else(is.na(FireplaceQu), "No Fireplace", FireplaceQu) %>% factor(),
+      BsmtExposure = if_else(is.na(BsmtExposure), "No Basement", BsmtExposure) %>% factor(),
+      Exterior1st = factor(Exterior1st),
+      Exterior2nd = factor(Exterior2nd),
+      Heating = factor(Heating),
+      GarageYrBlt = factor(GarageYrBlt) %>% addNA(),
+      # these are numerical variables that are missing
+      MasVnrArea = if_else(is.na(MasVnrArea), median(data$MasVnrArea, na.rm = T), MasVnrArea),
+      LotFrontage = if_else(is.na(LotFrontage), median(data$LotFrontage, na.rm = T), LotFrontage),
+      BsmtFinType2 = if_else(is.na(BsmtFinType2), "No Basement", BsmtFinType2) %>% factor(),
+    )
+}
+```
+
+# Training Data
+
+```{r}
+d_train <- read_csv("train.csv")
+```
+
+# Clean Training Data
+
+```{r}
+d_train_clean <- d_train %>% clean_data()
+
+train_dummies <- dummyVars(~., data = d_train_clean, fullRank = T)
+train_dummy_set <- predict(train_dummies, newdata = d_train_clean)
+train_complete <- preProcess(train_dummy_set, "medianImpute") %>% predict(train_dummy_set)
+
+train_corr_mat <- train_complete %>%
+  as_tibble() %>%
+  select(-Id) %>%
+  cor() %>%
+  round(2)
+sale_price_corr <- as.data.frame(train_corr_mat[, c("SalePrice")])
+colnames(sale_price_corr) <- c("corr")
+sale_price_corr <- rownames_to_column(sale_price_corr, var = "coef")
+```
+
+# Correlations
+
+```{r}
+(top_corr <- sale_price_corr %>%
+  mutate(corr = abs(corr)) %>%
+  filter(abs(corr) >= 0.3 & abs(corr) <= 0.9) %>%
+  arrange(desc(corr))
+)
+
+to_plot <- c("OverallQual", "PoolQC", "TotalSF", "TotalBath", "RoofMatl", "MSZoning", "GrLivArea", "GarageCars", "GarageArea", "TotalBsmtSF", "1stFlrSF", "FullBath", "TotRmsAbvGrd", "YearBuilt", "KitchenQual", "YearRemodAdd", "Foundation", "MasVnrArea", "Fireplaces", "GarageYrBlt", "ExterQual", "BsmtQual", "BsmtFinType1", "GarageFinish", "Neighborhood", "BsmtFinSF1", "MasVnrType", "SaleType", "GarageType", "SaleCondition", "FireplaceQu", "LotFrontage", "BsmtExposure", "2ndFlrSF", "WoodDeckSF", "OpenPorchSF", "Exterior1st", "Exterior2nd", "Heating", "BsmtFinType2", "BsmtFinSF2")
+```
+
+# Verify Training Data
+
+```{r}
+(test_missing(d_train_clean[to_plot]))
+```
+
+# Testing Data
+
+```{r}
+d_test <- read_csv("test.csv")
+```
+
+# Clean Testing Data
+```{r}
+d_test_clean <- d_test %>% clean_data()
+
+test_dummies <- dummyVars(~., data = d_test_clean, fullRank = T)
+test_dummy_set <- predict(test_dummies, newdata = d_test_clean)
+test_complete <- preProcess(test_dummy_set, "medianImpute") %>% predict(test_dummy_set)
+```
+
+# Verify Test Data
+
+```{r}
+(test_missing(d_test_clean))
+```
+
+# Model Planning
+
+y = log(SalePrice) ~ log(1stflrSF) + log(LotArea)
+
+## Coefs to explore
+
+- OverallQual
+- GrLivArea
+- GarageCars
+- GarageArea
+- TotalBsmtSF
+- `1stFlrSF`
+- ExterQualITA
+- FUllBath
+- TotRmsAbvGrd
+- YearBuilt
+- KitchenQualTA
+- YearRemodAdd
+- FoundationPConc
+- MasVnrArea
+- Fireplaces
+- GarageYrBlt
+- ExterQualGd
+- BsmtQualTA
+- BsmtFinType1GLQ
+- GarageFinishUnf
+- NeighborhoodNridgHt
+- BsmtFinSF1
+- MasVnrTypeNone
+- SaleTypeNew
+- GarageTypeDetchd
+- SaleConditionPartial
+- FoundationCBlock
+- FireplaceQuGd
+- LotFrontage
+- NeighborhoodNoRidge
+- MasVnrTypeStone
+- BsmtExposureNo
+- `2ndFlrSF`
+- KitchenQualGd
+- WoodDeckSF
+- OpenPorchSF
+- Exterior1stVinylSd
+- Exterior2ndVinylSd
+- BsmtExposureGd
+- HeatingQCTA
+
+# Plots
+
+```{r}
+for (name in to_plot) {
+  print(name)
+  print(ggplot(d_train, aes(d_train_clean[[name]], log(SalePrice))) +
+    geom_jitter() +
+    theme_minimal() +
+    geom_smooth(method = "lm", se = F) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5)) +
+    labs(
+      title = str_interp("log(SalePrice) ~ ${name}"),
+      x = name
+    ))
+}
+```
+
+# Modeling
+
+```{r}
+set.seed(123)
+
+(test_model <-
+  train(
+    log(SalePrice) ~
+      log(TotalSF) * Neighborhood +
+      RoofMatl +
+      MSZoning +
+      log(`1stFlrSF`) +
+      `2ndFlrSF` +
+      log(LotArea) +
+      # LotFrontage +
+      # BsmtFinSF1 +
+      OverallQual +
+      # GrLivArea +
+      GarageCars +
+      TotalBsmtSF +
+      TotalBath +
+      FullBath +
+      YearBuilt +
+      YearRemodAdd +
+      Foundation +
+      Fireplaces +
+      KitchenQual +
+      MasVnrType +
+      # SaleType +
+      # GarageType +
+      WoodDeckSF,
+      data = d_train_clean, method = "lm"
+  ))
+
+test_model %>% summary()
+o``
