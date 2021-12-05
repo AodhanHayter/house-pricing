@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(tidyverse)
 library(caret)
+library(RANN)
 library(missForest)
 library(ggplot2)
 ```
@@ -49,11 +50,19 @@ test_missing <- function(data) {
     filter(V1 > 0)
 }
 
+calc_total_SF <- function(firstSF, secondSF, bsmtSF) {
+  first <- if_else(is.na(firstSF), 0, firstSF)
+  second <- if_else(is.na(secondSF), 0, secondSF)
+  bsmt <- if_else(is.na(bsmtSF), 0, bsmtSF)
+  
+  first + second + bsmt
+}
+
 clean_data <- function(data) {
   data %>%
     select(-Utilities) %>%
     mutate(
-      TotalSF = `1stFlrSF` + `2ndFlrSF` + TotalBsmtSF,
+      TotalSF = calc_total_SF(`1stFlrSF`, `2ndFlrSF`, TotalBsmtSF),
       TotalBath = BsmtFullBath + BsmtHalfBath + FullBath + HalfBath,
       RoofMatl = factor(RoofMatl),
       MSZoning = factor(MSZoning),
@@ -84,6 +93,10 @@ clean_data <- function(data) {
 }
 ```
 
+```{r}
+to_plot <- c("OverallQual", "PoolQC", "TotalSF", "TotalBath", "RoofMatl", "MSZoning", "GrLivArea", "GarageCars", "GarageArea", "TotalBsmtSF", "1stFlrSF", "FullBath", "TotRmsAbvGrd", "YearBuilt", "KitchenQual", "YearRemodAdd", "Foundation", "MasVnrArea", "Fireplaces", "ExterQual", "BsmtQual", "BsmtFinType1", "GarageFinish", "Neighborhood", "BsmtFinSF1", "MasVnrType", "SaleType", "GarageType", "SaleCondition", "FireplaceQu", "LotFrontage", "BsmtExposure", "2ndFlrSF", "WoodDeckSF", "OpenPorchSF", "Heating", "BsmtFinType2", "BsmtFinSF2")
+```
+
 # Training Data
 
 ```{r}
@@ -93,10 +106,13 @@ d_train <- read_csv("train.csv")
 # Clean Training Data
 
 ```{r}
-d_train_clean <- d_train %>% clean_data()
+d_train_clean <- d_train %>%
+  select(-Id) %>%
+  clean_data()
 
-train_dummies <- dummyVars(~., data = d_train_clean, fullRank = T)
-train_dummy_set <- predict(train_dummies, newdata = d_train_clean)
+to_train <- d_train_clean[c("SalePrice", to_plot)]
+train_dummies <- dummyVars(~., data = to_train, fullRank = T)
+train_dummy_set <- predict(train_dummies, newdata = to_train)
 train_complete <- preProcess(train_dummy_set, "medianImpute") %>% predict(train_dummy_set)
 
 train_corr_mat <- train_complete %>%
@@ -118,7 +134,7 @@ sale_price_corr <- rownames_to_column(sale_price_corr, var = "coef")
   arrange(desc(corr))
 )
 
-to_plot <- c("OverallQual", "PoolQC", "TotalSF", "TotalBath", "RoofMatl", "MSZoning", "GrLivArea", "GarageCars", "GarageArea", "TotalBsmtSF", "1stFlrSF", "FullBath", "TotRmsAbvGrd", "YearBuilt", "KitchenQual", "YearRemodAdd", "Foundation", "MasVnrArea", "Fireplaces", "GarageYrBlt", "ExterQual", "BsmtQual", "BsmtFinType1", "GarageFinish", "Neighborhood", "BsmtFinSF1", "MasVnrType", "SaleType", "GarageType", "SaleCondition", "FireplaceQu", "LotFrontage", "BsmtExposure", "2ndFlrSF", "WoodDeckSF", "OpenPorchSF", "Exterior1st", "Exterior2nd", "Heating", "BsmtFinType2", "BsmtFinSF2")
+# to_plot <- c("OverallQual", "PoolQC", "TotalSF", "TotalBath", "RoofMatl", "MSZoning", "GrLivArea", "GarageCars", "GarageArea", "TotalBsmtSF", "1stFlrSF", "FullBath", "TotRmsAbvGrd", "YearBuilt", "KitchenQual", "YearRemodAdd", "Foundation", "MasVnrArea", "Fireplaces", "GarageYrBlt", "ExterQual", "BsmtQual", "BsmtFinType1", "GarageFinish", "Neighborhood", "BsmtFinSF1", "MasVnrType", "SaleType", "GarageType", "SaleCondition", "FireplaceQu", "LotFrontage", "BsmtExposure", "2ndFlrSF", "WoodDeckSF", "OpenPorchSF", "Exterior1st", "Exterior2nd", "Heating", "BsmtFinType2", "BsmtFinSF2")
 ```
 
 # Verify Training Data
@@ -137,17 +153,30 @@ d_test <- read_csv("test.csv")
 ```{r}
 d_test_clean <- d_test %>% clean_data()
 
+d_test_clean$PoolQC <- factor(d_test_clean$PoolQC, levels = d_train_clean$PoolQC %>% levels()) %>% addNA()
+d_test_clean$RoofMatl <- factor(d_test_clean$RoofMatl, levels = d_train_clean$RoofMatl %>% levels())
+d_test_clean$Exterior1st<- factor(d_test_clean$Exterior1st, levels = d_train_clean$Exterior1st %>% levels())
+d_test_clean$Exterior2nd<- factor(d_test_clean$Exterior2nd, levels = d_train_clean$Exterior2nd%>% levels())
+d_test_clean$Heating<- factor(d_test_clean$Heating, levels = d_train_clean$Heating%>% levels())
+
+
+to_test <- d_test_clean[to_plot]
 test_dummies <- dummyVars(~., data = d_test_clean, fullRank = T)
 test_dummy_set <- predict(test_dummies, newdata = d_test_clean)
 test_complete <- preProcess(test_dummy_set, "medianImpute") %>% predict(test_dummy_set)
+
 ```
 
 # Verify Test Data
 
 ```{r}
-(test_missing(d_test_clean))
+(test_missing(d_test_clean[to_plot]))
 ```
 
+# Compare Factor Levels
+```{r}
+compare_factor_levels(d_train, d_test) %>% filter(identical_levels == "no")
+```
 # Model Planning
 
 y = log(SalePrice) ~ log(1stflrSF) + log(LotArea)
@@ -217,6 +246,9 @@ for (name in to_plot) {
 ```{r}
 set.seed(123)
 
+(imp_model <- train(log(SalePrice) ~ ., data = train_complete, method = "lm"))
+imp_model %>% summary
+
 (test_model <-
   train(
     log(SalePrice) ~
@@ -243,8 +275,23 @@ set.seed(123)
       # SaleType +
       # GarageType +
       WoodDeckSF,
-      data = d_train_clean, method = "lm"
+      data = d_train_clean,
+      method = "lm"
   ))
 
 test_model %>% summary()
-o``
+```
+```{r}
+rmse <- function(actual, fitted) sqrt(mean((actual - fitted)^2))
+
+(model_rmse = rmse(log(d_train_clean$SalePrice), fitted(test_model)))
+```
+
+# Generate Predictions
+```{r}
+submit <- as.data.frame(test_complete) %>%
+  select(Id) %>%
+  mutate(SalePrice = exp(predict(imp_model, newdata = test_complete)))
+
+write_csv(submit, file = "submission.csv")
+```
