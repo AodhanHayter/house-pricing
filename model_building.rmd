@@ -58,25 +58,34 @@ calc_total_SF <- function(firstSF, secondSF, bsmtSF) {
   first + second + bsmt
 }
 
+calc_total_bath <- function(full, half, bsmt_full, bsmt_half) {
+  f <- if_else(is.na(full), 0, full)
+  h <- if_else(is.na(half), 0, half)
+  bf <- if_else(is.na(bsmt_full), 0, bsmt_full)
+  bh <- if_else(is.na(bsmt_half), 0, bsmt_half)
+  
+  f + h + bf + bh
+}
+
 clean_data <- function(data) {
   data %>%
     select(-Utilities) %>%
     mutate(
       TotalSF = calc_total_SF(`1stFlrSF`, `2ndFlrSF`, TotalBsmtSF),
-      TotalBath = BsmtFullBath + BsmtHalfBath + FullBath + HalfBath,
+      TotalBath = calc_total_bath(FullBath, HalfBath, BsmtFullBath, BsmtHalfBath),
       RoofMatl = factor(RoofMatl),
-      MSZoning = factor(MSZoning),
+      MSZoning = if_else(is.na(MSZoning), "RL", MSZoning) %>% factor(),
       OverallQual = factor(OverallQual),
       PoolQC = factor(PoolQC) %>% addNA(),
       ExterQual = factor(ExterQual),
-      KitchenQual = factor(KitchenQual),
+      KitchenQual = if_else(is.na(KitchenQual), "TA", KitchenQual) %>% factor(),
       Foundation = factor(Foundation),
       BsmtQual = factor(BsmtQual) %>% addNA(),
       BsmtFinType1 = if_else(is.na(BsmtFinType1), "No Basement", BsmtFinType1) %>% factor(),
       GarageFinish = if_else(is.na(GarageFinish), "No Garage", GarageFinish) %>% factor(),
       Neighborhood = factor(Neighborhood),
       MasVnrType = factor(MasVnrType) %>% addNA(),
-      SaleType = factor(SaleType),
+      SaleType = if_else(is.na(SaleType), "WD", SaleType) %>% factor(),
       GarageType = if_else(is.na(GarageType), "No Garage", GarageType) %>% factor(),
       SaleCondition = factor(SaleCondition),
       FireplaceQu = if_else(is.na(FireplaceQu), "No Fireplace", FireplaceQu) %>% factor(),
@@ -85,10 +94,16 @@ clean_data <- function(data) {
       Exterior2nd = factor(Exterior2nd),
       Heating = factor(Heating),
       GarageYrBlt = factor(GarageYrBlt) %>% addNA(),
+      BsmtFinType2 = if_else(is.na(BsmtFinType2), "No Basement", BsmtFinType2) %>% factor(),
+      YearBuilt = factor(YearBuilt),
       # these are numerical variables that are missing
       MasVnrArea = if_else(is.na(MasVnrArea), median(data$MasVnrArea, na.rm = T), MasVnrArea),
       LotFrontage = if_else(is.na(LotFrontage), median(data$LotFrontage, na.rm = T), LotFrontage),
-      BsmtFinType2 = if_else(is.na(BsmtFinType2), "No Basement", BsmtFinType2) %>% factor(),
+      GarageCars = if_else(is.na(GarageCars), median(data$GarageCars, na.rm =T), GarageCars),
+      GarageArea = if_else(is.na(GarageArea), median(data$GarageArea, na.rm =T), GarageArea),
+      BsmtFinSF1 = if_else(is.na(BsmtFinSF1), median(data$BsmtFinSF1, na.rm =T), BsmtFinSF1),
+      BsmtFinSF2 = if_else(is.na(BsmtFinSF2), median(data$BsmtFinSF2, na.rm =T), BsmtFinSF2),
+      TotalBsmtSF = if_else(is.na(TotalBsmtSF), median(data$TotalBsmtSF, na.rm =T), TotalBsmtSF),
     )
 }
 ```
@@ -114,10 +129,11 @@ to_train <- d_train_clean[c("SalePrice", to_plot)]
 train_dummies <- dummyVars(~., data = to_train, fullRank = T)
 train_dummy_set <- predict(train_dummies, newdata = to_train)
 train_complete <- preProcess(train_dummy_set, "medianImpute") %>% predict(train_dummy_set)
+```
 
+```{r}
 train_corr_mat <- train_complete %>%
   as_tibble() %>%
-  select(-Id) %>%
   cor() %>%
   round(2)
 sale_price_corr <- as.data.frame(train_corr_mat[, c("SalePrice")])
@@ -241,13 +257,20 @@ for (name in to_plot) {
 }
 ```
 
+```{r}
+ggplot(d_train_clean, aes(log(`1stFlrSF`), log(SalePrice)))+
+  geom_point(alpha = .15)+
+  geom_smooth(method="lm", se = F, aes(col = Neighborhood)) +
+  labs(title = "log(price) ~ log(sqft) by city")+
+  theme_minimal()
+```
 # Modeling
 
 ```{r}
 set.seed(123)
 
-(imp_model <- train(log(SalePrice) ~ ., data = train_complete, method = "lm"))
-imp_model %>% summary
+# (imp_model <- train(log(SalePrice) ~ ., data = train_complete, method = "lm"))
+# imp_model %>% summary
 
 (test_model <-
   train(
@@ -292,6 +315,10 @@ rmse <- function(actual, fitted) sqrt(mean((actual - fitted)^2))
 submit <- as.data.frame(test_complete) %>%
   select(Id) %>%
   mutate(SalePrice = exp(predict(imp_model, newdata = test_complete)))
+
+submit <- d_test_clean %>%
+  select(Id) %>%
+  mutate(SalePrice = exp(predict(test_model, newdata = d_test_clean)))
 
 write_csv(submit, file = "submission.csv")
 ```
